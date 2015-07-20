@@ -37,13 +37,14 @@
         batch-size (:onyx/batch-size task-map)
         max-segments (min (- max-pending pending) batch-size)
         ms (or (:onyx/batch-timeout task-map) (:onyx/batch-timeout defaults))
-        step-ms (/ ms (:onyx/batch-size task-map))
+        t-timeout (+ ms (System/currentTimeMillis))
         timeout-stream (manifold.stream/stream)
+        timeout-fn (fn [] (max 0 (- t-timeout (System/currentTimeMillis))))
         batch (if (pos? max-segments)
                 (loop [segments [] cnt 0]
                   (if (= cnt max-segments)
                     segments
-                    (let [message @(try-take! stream ::drained step-ms ::timeout)
+                    (let [message @(try-take! stream ::drained (timeout-fn) ::timeout)
                           message (if (or (= ::drained message) (= ::timeout message))
                                     @(try-take! retry-stream nil 0 nil)
                                     message)]
@@ -55,7 +56,7 @@
                                         :message message})
                                  (inc cnt)))
                         segments))))
-                @(try-take! timeout-stream nil ms nil))]
+                @(try-take! timeout-stream nil (timeout-fn) nil))]
     (doseq [m batch]
       (swap! pending-messages assoc (:id m) (:message m)))
     (when (and (= 1 (count @pending-messages))
