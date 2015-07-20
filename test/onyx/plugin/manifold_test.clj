@@ -88,9 +88,6 @@
   :lifecycles lifecycles
   :task-scheduler :onyx.task-scheduler/balanced})
 
-
-;;;;;;;;;;;;;;;;;;;; TODO: Verify only 3 peers were actually used ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 (def results (take-segments! out-stream))
 
 (doseq [v-peer v-peers]
