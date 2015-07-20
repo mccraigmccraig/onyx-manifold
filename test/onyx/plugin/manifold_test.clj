@@ -1,104 +1,104 @@
 (ns onyx.plugin.manifold-test
-  (:require [manifold.stream :refer [take! try-take! put! close! stream]]
-            [onyx.peer.task-lifecycle-extensions :as l-ext]
-            [onyx.plugin.manifold]
+  (:require [manifold.stream :refer [take! try-take! put! stream]]
             [midje.sweet :refer :all]
+            [onyx.plugin.manifold :refer [take-segments!]]
+            [onyx.test-helper :refer [load-config]]
             [onyx.api]))
 
 (def id (java.util.UUID/randomUUID))
 
-(def scheduler :onyx.job-scheduler/round-robin)
+(def config (load-config))
 
-(def env-config
-  {:hornetq/mode :vm
-   :hornetq/server? true
-   :hornetq.server/type :vm
-   :zookeeper/address "127.0.0.1:2185"
-   :zookeeper/server? true
-   :zookeeper.server/port 2185
-   :onyx/id id
-   :onyx.peer/job-scheduler scheduler})
+(def env-config (assoc (:env-config config) :onyx/id id))
 
-(def peer-config
-  {:hornetq/mode :vm
-   :zookeeper/address "127.0.0.1:2185"
-   :onyx/id id
-   :onyx.peer/inbox-capacity 100
-   :onyx.peer/outbox-capacity 100
-   :onyx.peer/job-scheduler scheduler})
+(def peer-config (assoc (:peer-config config) :onyx/id id))
 
 (def env (onyx.api/start-env env-config))
 
-(def batch-size 25)
+(def peer-group (onyx.api/start-peer-group peer-config))
 
-(def workflow
-  [[:in :increment]
-   [:increment :out]])
+(def n-messages 15000)
+
+(def batch-size 40)
+
+(defn my-inc [{:keys [n] :as segment}]
+  (assoc segment :n (inc n)))
 
 (def catalog
   [{:onyx/name :in
     :onyx/ident :manifold/read-from-stream
     :onyx/type :input
     :onyx/medium :manifold
-    :onyx/consumption :concurrent
     :onyx/batch-size batch-size
-    :onyx/batch-timeout 200
     :onyx/max-peers 1
     :onyx/doc "Reads segments from a manifold stream"}
 
-   {:onyx/name :increment
-    :onyx/fn :onyx.plugin.manifold-test/increment
+   {:onyx/name :inc
+    :onyx/fn :onyx.plugin.manifold-test/my-inc
     :onyx/type :function
-    :onyx/consumption :concurrent
-    :onyx/batch-size batch-size
-    :onyx/batch-timeout 200}
+    :onyx/max-peers 1
+    :onyx/batch-size batch-size}
 
    {:onyx/name :out
     :onyx/ident :manifold/write-to-stream
     :onyx/type :output
     :onyx/medium :manifold
-    :onyx/consumption :concurrent
     :onyx/batch-size batch-size
-    :onyx/batch-timeout 200
     :onyx/max-peers 1
     :onyx/doc "Writes segments to a manifold stream"}])
 
-(defn increment [segment]
-  (assoc segment :n (inc (:n segment))))
+(def workflow [[:in :inc] [:inc :out]])
 
-(def in-stream (stream 10000))
+(def in-stream (stream (inc n-messages)))
 
-(def out-stream (stream 10000))
+(def out-stream (stream (inc n-messages)))
 
-(defmethod l-ext/inject-lifecycle-resources :in
-  [_ _] {:manifold/in-stream in-stream})
+(defn inject-in-stream [event lifecycle]
+  {:manifold/stream in-stream})
 
-(defmethod l-ext/inject-lifecycle-resources :out
-  [_ _] {:manifold/out-stream out-stream})
+(defn inject-out-stream [event lifecycle]
+  {:manifold/stream out-stream})
 
-(def n-segments 100)
+(def in-calls
+  {:lifecycle/before-task-start inject-in-stream})
 
-(doseq [n (range n-segments)]
+(def out-calls
+  {:lifecycle/before-task-start inject-out-stream})
+
+(def lifecycles
+  [{:lifecycle/task :in
+    :lifecycle/calls :onyx.plugin.manifold-test/in-calls}
+   {:lifecycle/task :in
+    :lifecycle/calls :onyx.plugin.manifold/reader-calls}
+   {:lifecycle/task :out
+    :lifecycle/calls :onyx.plugin.manifold-test/out-calls}
+   {:lifecycle/task :out
+    :lifecycle/calls :onyx.plugin.manifold/writer-calls}])
+
+(doseq [n (range n-messages)]
   (put! in-stream {:n n}))
 
 (put! in-stream :done)
 
-(close! in-stream)
+(def v-peers (onyx.api/start-peers 8 peer-group))
 
-(def v-peers (onyx.api/start-peers! 1 peer-config))
+(onyx.api/submit-job
+ peer-config
+ {:catalog catalog :workflow workflow
+  :lifecycles lifecycles
+  :task-scheduler :onyx.task-scheduler/balanced})
 
-(onyx.api/submit-job peer-config
-                     {:catalog catalog
-                      :workflow workflow
-                      :task-scheduler :onyx.task-scheduler/round-robin})
 
-(def results (doall (map (fn [_] @(take! out-stream)) (range (inc n-segments)))))
+;;;;;;;;;;;;;;;;;;;; TODO: Verify only 3 peers were actually used ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(let [expected (set (map (fn [x] {:n (inc x)}) (range n-segments)))]
-  (fact (set (butlast results)) => expected)
-  (fact (last results) => :done))
+(def results (take-segments! out-stream))
 
 (doseq [v-peer v-peers]
   (onyx.api/shutdown-peer v-peer))
 
+(let [expected (set (map (fn [x] {:n (inc x)}) (range n-messages)))]
+  (fact (set (butlast results)) => expected)
+  (fact (last results) => :done))
+
+(onyx.api/shutdown-peer-group peer-group)
 (onyx.api/shutdown-env env)
