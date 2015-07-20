@@ -1,4 +1,4 @@
-(defproject mccraigmccraig/onyx-manifold "0.2.0"
+(defproject mccraigmccraig/onyx-manifold "0.2.1"
   :description "Onyx plugin for Manifold"
   :url "https://github.com/mccraigmccraig/onyx-manifold"
   :license {:name "Eclipse Public License"
