@@ -2,6 +2,12 @@
 
 Onyx plugin providing read and write facilities for Manifold. Based on / shamelessly ripped off of : [onyx-core-async](https://github.com/onyx-platform/onyx/blob/master/src/onyx/plugin/core_async.clj)
 
+This plugin works fine, but after some playing around, i've realised it's kinda pointless :
+in order to make the take! timeout
+behaviour match other plugins I had to convert the manifold streams into core.async channels (since the timeout
+behaviour uses alts!! and a timeout channel, and there is no straightforward manifold equivalent). Given this,
+you might as well just convert your manifold streams to core.async channels and use the core.async plugin.
+
 #### Installation
 
 In your project file:
